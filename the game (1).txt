@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>School Escape Game with Chase, Passage, Cutscene, Jump Scare, and Hiding</title>
+<style>
+  canvas { background: #000; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let keys = {};
+document.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+let mouseX = 400, mouseY = 300;
+document.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+
+// Variables
+const WIDTH = 800, HEIGHT = 600;
+let gameOver = false;
+let inCutscene = false;
+let inJumpScare = false;
+let jumpScareAlpha = 0;
+
+let player = { x: WIDTH/2, y: HEIGHT/2, size: 30, angle: 0 };
+let maxSanity = 100, sanity = maxSanity;
+let maxStamina = 100, stamina = maxStamina;
+
+const sanityDecreaseRate = 0.1;
+const sanityRecoveryRate = 0.05;
+const staminaDecreaseRate = 0.2;
+const staminaRecoveryRate = 0.1;
+
+let monster = { x: 100, y: 100, size: 40, speed: 2, stopped: false, wandering: false, wanderTargetX: 0, wanderTargetY: 0 };
+let fragments = [];
+for (let i=0; i<5; i++) {
+  fragments.push({ x: Math.random()*700+50, y: Math.random()*500+50 });
+}
+// Updated vents - on walls, squares
+const ventSize = 40;
+const vents = [
+  { x: 50, y: HEIGHT/2 - ventSize/2, w: ventSize, h: ventSize }, // left wall
+  { x: WIDTH - ventSize - 50, y: HEIGHT/2 - ventSize/2, w: ventSize, h: ventSize }, // right wall
+  { x: WIDTH/2 - ventSize/2, y: 50, w: ventSize, h: ventSize }, // top wall
+  { x: WIDTH/2 - ventSize/2, y: HEIGHT - ventSize - 50, w: ventSize, h: ventSize } // bottom wall
+];
+
+let collectedFragments = 0;
+let passageOpen = false;
+
+const font = '20px Arial';
+
+function drawText(text, x, y, color='white') {
+  ctx.fillStyle = color;
+  ctx.font = font;
+  ctx.fillText(text, x, y);
+}
+
+function gameLoop() {
+  if (inCutscene) {
+    renderCutscene();
+    return;
+  }
+  if (inJumpScare) {
+    renderJumpScare();
+    return;
+  }
+  if (gameOver) return;
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+  const pointerX = mouseX;
+  const pointerY = mouseY;
+
+  // Movement
+  let moveX = 0, moveY = 0;
+  let isRunning = keys['shift'];
+  let currentSpeed = 5;
+  if (isRunning && stamina > 0) {
+    currentSpeed *= 2;
+    stamina -= staminaDecreaseRate * 2;
+    if (stamina < 0) stamina=0;
+  } else {
+    if (stamina < maxStamina) {
+      stamina += staminaRecoveryRate;
+    }
+    if (stamina > maxStamina) stamina = maxStamina;
+  }
+
+  if (keys['w']) moveY -= currentSpeed;
+  if (keys['s']) moveY += currentSpeed;
+  if (keys['a']) moveX -= currentSpeed;
+  if (keys['d']) moveX += currentSpeed;
+
+  player.x += moveX;
+  player.y += moveY;
+  player.x = Math.max(0, Math.min(WIDTH - player.size, player.x));
+  player.y = Math.max(0, Math.min(HEIGHT - player.size, player.y));
+
+  // Facing angle
+  const dx = pointerX - (player.x + player.size/2);
+  const dy = pointerY - (player.y + player.size/2);
+  player.angle = Math.atan2(dy, dx);
+
+  // Draw player
+  const cx = player.x + player.size/2;
+  const cy = player.y + player.size/2;
+  ctx.beginPath();
+  ctx.moveTo(cx + Math.cos(player.angle) * 15, cy + Math.sin(player.angle) * 15);
+  ctx.lineTo(cx + Math.cos(player.angle + 2.5) * 15, cy + Math.sin(player.angle + 2.5) * 15);
+  ctx.lineTo(cx + Math.cos(player.angle - 2.5) * 15, cy + Math.sin(player.angle - 2.5) * 15);
+  ctx.closePath();
+  ctx.fillStyle = 'lime';
+  ctx.fill();
+
+  // Draw fragments
+  for (let frag of fragments) {
+    ctx.beginPath();
+    ctx.arc(frag.x, frag.y, 10, 0, Math.PI*2);
+    ctx.fillStyle = 'white';
+    ctx.fill();
+  }
+
+  // Draw vents as squares on walls
+  ctx.fillStyle='blue';
+  for (let vent of vents) {
+    ctx.fillRect(vent.x, vent.y, vent.w, vent.h);
+  }
+
+  // Collect fragments
+  for (let i=fragments.length-1; i>=0; i--) {
+    const f = fragments[i];
+    const dist = Math.hypot((player.x + player.size/2) - f.x, (player.y + player.size/2) - f.y);
+    if (dist < 20) {
+      fragments.splice(i,1);
+      collectedFragments++;
+    }
+  }
+
+  // Draw monster as a red triangle
+  drawTriangleMonster(monster.x, monster.y, monster.size);
+
+  // Check if cursor is over monster
+  if (isCursorOverMonster()) {
+    monster.stopped = true;
+  } else {
+    monster.stopped = false;
+  }
+
+  // Check if player is in vent (hiding)
+  let inVents = false;
+  for (let vent of vents) {
+    if (player.x >= vent.x && player.x <= vent.x + vent.w && player.y >= vent.y && player.y <= vent.y + vent.h) {
+      inVents = true;
+      if (sanity<maxSanity) {
+        sanity += sanityRecoveryRate*2;
+        if (sanity>maxSanity) sanity=maxSanity;
+      }
+      break;
+    }
+  }
+
+  // Monster behavior
+  if (inVents) {
+    // Wander aimlessly
+    if (!monster.wandering || Math.hypot(monster.x - monster.wanderTargetX, monster.y - monster.wanderTargetY) < 10) {
+      monster.wanderTargetX = Math.random() * (WIDTH - monster.size);
+      monster.wanderTargetY = Math.random() * (HEIGHT - monster.size);
+      monster.wandering = true;
+    }
+    const dxm = monster.wanderTargetX - monster.x;
+    const dym = monster.wanderTargetY - monster.y;
+    const distWander = Math.hypot(dxm, dym);
+    if (distWander > 1) {
+      monster.x += (dxm / distWander) * monster.speed;
+      monster.y += (dym / distWander) * monster.speed;
+    }
+  } else {
+    // Chase the player
+    const dirX = player.x - monster.x;
+    const dirY = player.y - monster.y;
+    const distToPlayer = Math.hypot(dirX, dirY);
+    if (!monster.stopped && distToPlayer > 1) {
+      monster.x += (dirX / distToPlayer) * monster.speed;
+      monster.y += (dirY / distToPlayer) * monster.speed;
+    }
+  }
+
+  // Check collision with player
+  if (player.x < monster.x + monster.size &&
+      player.x + player.size > monster.x &&
+      player.y < monster.y + monster.size &&
+      player.y + player.size > monster.y) {
+    triggerJumpScare();
+    return;
+  }
+
+  // Sanity mechanics
+  const distMonster = Math.hypot((player.x+player.size/2)-(monster.x+monster.size/2), (player.y+player.size/2)-(monster.y+monster.size/2));
+  if (distMonster < 150) {
+    sanity -= sanityDecreaseRate * (150 - distMonster)/150;
+  } else {
+    sanity += sanityRecoveryRate;
+  }
+  if (sanity<0) sanity=0;
+  if (sanity===0) { alert("Sanity lost! Game Over."); gameOver=true; return; }
+
+  // Draw bars
+  ctx.fillStyle='white'; ctx.fillRect(10,50,200,20);
+  ctx.fillStyle='green'; ctx.fillRect(10,50,200*(stamina/maxStamina),20);
+  drawText('Stamina',10,45);
+  ctx.fillStyle='white'; ctx.fillRect(10,80,200,20);
+  ctx.fillStyle='yellow'; ctx.fillRect(10,80,200*(sanity/maxSanity),20);
+  drawText('Sanity',10,75);
+
+  // Progress and passage
+  drawText('Fragments: ' + collectedFragments,10,10);
+  if (collectedFragments >= 5 && !passageOpen) {
+    passageOpen=true;
+  }
+
+  if (passageOpen && !inEscapeSequence) {
+    ctx.fillStyle='gray';
+    ctx.fillRect(WIDTH/2 - 50, HEIGHT/2 - 150, 100, 300);
+  }
+
+  if (passageOpen && !inEscapeSequence) {
+    if (player.x > WIDTH/2 - 50 && player.x < WIDTH/2 + 50 && player.y > HEIGHT/2 - 150 && player.y < HEIGHT/2 + 150) {
+      startCutscene();
+    }
+  }
+
+  // Draw cross
+  ctx.strokeStyle='white';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(WIDTH/2 - 10, HEIGHT/2);
+  ctx.lineTo(WIDTH/2 + 10, HEIGHT/2);
+  ctx.moveTo(WIDTH/2, HEIGHT/2 - 10);
+  ctx.lineTo(WIDTH/2, HEIGHT/2 + 10);
+  ctx.stroke();
+
+  requestAnimationFrame(gameLoop);
+}
+
+function drawTriangleMonster(x, y, size) {
+  ctx.fillStyle='red';
+  ctx.beginPath();
+  ctx.moveTo(x + size/2, y);
+  ctx.lineTo(x, y + size);
+  ctx.lineTo(x + size, y + size);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function isCursorOverMonster() {
+  const x = monster.x, y = monster.y, size = monster.size;
+  const px = mouseX, py = mouseY;
+  const v1 = {x: x + size/2, y: y};
+  const v2 = {x: x, y: y + size};
+  const v3 = {x: x + size, y: y + size};
+  return pointInTriangle({x:px,y:py}, v1, v2, v3);
+}
+
+function pointInTriangle(pt, v1, v2, v3) {
+  const d1 = sign(pt, v1, v2);
+  const d2 = sign(pt, v2, v3);
+  const d3 = sign(pt, v3, v1);
+  const hasNeg = (d1<0) || (d2<0) || (d3<0);
+  const hasPos = (d1>0) || (d2>0) || (d3>0);
+  return !(hasNeg && hasPos);
+}
+function sign(p1, p2, p3) {
+  return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+}
+
+function triggerJumpScare() {
+  inJumpScare = true;
+  let scareAlpha = 0;
+  const scareInterval = setInterval(() => {
+    ctx.fillStyle = `rgba(255,0,0,${scareAlpha})`;
+    ctx.fillRect(0,0,WIDTH,HEIGHT);
+    ctx.fillStyle='white';
+    ctx.font='40px Arial';
+    ctx.fillText('JUMP SCARE!', WIDTH/2 - 100, HEIGHT/2);
+    scareAlpha += 0.1;
+    if (scareAlpha >= 1) {
+      clearInterval(scareInterval);
+      alert("You got jump scared!");
+      gameOver=true;
+    }
+  }, 100);
+}
+
+function startCutscene() {
+  inCutscene=true;
+  setTimeout(() => {
+    alert("You wake up in the real world. Something isn't right...");
+    ctx.fillStyle='black';
+    ctx.fillRect(0,0,WIDTH,HEIGHT);
+    inCutscene=false;
+    gameOver=true;
+  }, 2000);
+}
+
+function renderCutscene() {
+  ctx.fillStyle='black';
+  ctx.fillRect(0,0,WIDTH,HEIGHT);
+  drawText("You wake up in the real world...",WIDTH/2 - 150,HEIGHT/2);
+}
+
+// Main start
+gameLoop();
+</script>
+</body>
+</html>
